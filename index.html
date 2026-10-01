@@ -122,7 +122,7 @@
 /* =====================================================================
    SETTINGS: EDIT THIS
    ===================================================================== */
-const CONTRACT_ADDRESS = "0x99e3d38d665143a5c803df9e0d188d9f5627663a";   // <-- paste your deployed address here
+const CONTRACT_ADDRESS = "0xYourContractAddressHere";   // <-- paste your deployed address here
 
 /* Sepolia network details (you normally do not need to change these) */
 const SEPOLIA_CHAIN_ID_DEC = 11155111;
@@ -177,9 +177,14 @@ function friendlyError(err) {
   const nested = err && ((err.info && err.info.error && err.info.error.message) ||
                          (err.error && err.error.message) ||
                          (err.data && err.data.message));
-  if (err && err.reason) return err.reason;
-  if (nested) return nested;
-  return (err && (err.shortMessage || err.message)) || "Something went wrong.";
+  let base = (err && err.reason) || nested || (err && (err.shortMessage || err.message)) || "Something went wrong.";
+  // "could not coalesce error" hides the cause, so also print the raw error details
+  if (/coalesce/i.test(base)) {
+    let raw = "";
+    try { raw = JSON.stringify(err, (k, v) => typeof v === "bigint" ? v.toString() : v).slice(0, 700); } catch (e) {}
+    base += " | details: " + raw;
+  }
+  return base;
 }
 
 /* Shorten an address like 0x1234...abcd */
@@ -415,7 +420,16 @@ async function postRequest() {
   }
   if (value <= 0n) { setStatus("The payment must be greater than 0.", "err"); return; }
 
-  await sendTx("Posting request", () => writeContract.postRequest(subject, { value }));
+  // Dry run first: asks the contract "would this work?" without spending any gas
+  try {
+    await writeContract.postRequest.staticCall(subject, { value });
+  } catch (err) {
+    setStatus("❌ The contract would reject this: " + esc(friendlyError(err)), "err");
+    return;
+  }
+
+  // gasLimit is set by hand so a flaky gas estimate cannot block the transaction
+  await sendTx("Posting request", () => writeContract.postRequest(subject, { value, gasLimit: 400000n }));
   $("subject").value = "";
   $("amount").value = "";
 }
