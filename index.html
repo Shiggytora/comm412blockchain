@@ -122,7 +122,7 @@
 /* =====================================================================
    SETTINGS: EDIT THIS
    ===================================================================== */
-const CONTRACT_ADDRESS = "0x99e3d38D665143a5c803df9E0d188d9F5627663A";   // <-- paste your deployed address here
+const CONTRACT_ADDRESS = "0x99e3d38d665143a5c803df9e0d188d9f5627663a";   // <-- paste your deployed address here
 
 /* Sepolia network details (you normally do not need to change these) */
 const SEPOLIA_CHAIN_ID_DEC = 11155111;
@@ -172,7 +172,14 @@ function friendlyError(err) {
   if (err && (err.code === "ACTION_REJECTED" || err.code === 4001)) {
     return "You rejected the request in MetaMask.";
   }
-  return (err && (err.reason || err.shortMessage || err.message)) || "Something went wrong.";
+  console.error(err);   // full error is always available in the browser console (F12)
+  // ethers sometimes hides the real reason inside nested error objects, so dig for it
+  const nested = err && ((err.info && err.info.error && err.info.error.message) ||
+                         (err.error && err.error.message) ||
+                         (err.data && err.data.message));
+  if (err && err.reason) return err.reason;
+  if (nested) return nested;
+  return (err && (err.shortMessage || err.message)) || "Something went wrong.";
 }
 
 /* Shorten an address like 0x1234...abcd */
@@ -228,6 +235,15 @@ async function connect() {
     // Contract objects: one for reading, one for writing
     readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
     writeContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+
+    // Safety check: is there really a contract at this address on Sepolia?
+    const code = await provider.getCode(CONTRACT_ADDRESS);
+    if (code === "0x") {
+      setStatus("No contract found at <code>" + CONTRACT_ADDRESS + "</code> on Sepolia. " +
+                "Did you deploy it to Sepolia (Remix: Environment = Injected Provider - MetaMask), " +
+                "not to the Remix VM? Deploy again and paste the new address.", "err");
+      return;
+    }
 
     $("connectBtn").textContent = "Connected";
     $("connectBtn").disabled = true;
