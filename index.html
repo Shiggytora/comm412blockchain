@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TutorTrust</title>
+
+<!-- ethers.js v6 (loaded from a CDN, no build tools needed).
+     If your assignment gave you an exact <script> tag, replace this line with it. -->
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+
+<style>
+  /* ---------- Basic look ---------- */
+  :root {
+    --bg: #f5f7fb; --card: #ffffff; --text: #1d2433; --muted: #6b7385;
+    --primary: #3b5bdb; --primary-dark: #2f49b3; --border: #e1e5ee;
+    --green: #2b8a3e; --red: #c92a2a; --orange: #e67700; --grey: #868e96;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         background: var(--bg); color: var(--text); line-height: 1.45; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+           justify-content: space-between; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 1.6rem; }
+  h2 { margin: 0 0 12px; font-size: 1.1rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+          padding: 16px; margin-bottom: 16px; }
+  .muted { color: var(--muted); font-size: .9rem; }
+  label { display: block; font-size: .85rem; font-weight: 600; margin: 10px 0 4px; }
+  input { width: 100%; padding: 10px; font-size: 1rem; border: 1px solid var(--border);
+          border-radius: 8px; }
+  button { cursor: pointer; border: 0; border-radius: 8px; padding: 10px 14px;
+           font-size: .95rem; font-weight: 600; color: #fff; background: var(--primary); }
+  button:hover:not(:disabled) { background: var(--primary-dark); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.small { padding: 6px 10px; font-size: .85rem; margin-right: 4px; }
+  button.green { background: var(--green); }
+  button.red { background: var(--red); }
+  button.grey { background: var(--grey); }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; }
+  .row > div { flex: 1 1 200px; }
+
+  /* ---------- Table ---------- */
+  .table-scroll { overflow-x: auto; }   /* lets the table scroll sideways on phones */
+  table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border);
+           vertical-align: middle; }
+  th { color: var(--muted); font-size: .8rem; text-transform: uppercase; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px;
+           font-size: .8rem; font-weight: 700; color: #fff; }
+  .Open { background: var(--green); }
+  .Accepted { background: var(--orange); }
+  .Paid { background: var(--primary); }
+  .Cancelled { background: var(--grey); }
+
+  /* ---------- Status box ---------- */
+  #status { padding: 12px; border-radius: 8px; background: #eef1f8; display: none;
+            word-break: break-word; }
+  #status.ok { background: #e6f4ea; }
+  #status.err { background: #fdecea; color: var(--red); }
+  a { color: var(--primary); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>🎓 TutorTrust</h1>
+      <div class="muted">Peer-tutoring escrow on Ethereum Sepolia</div>
+    </div>
+    <div>
+      <button id="connectBtn">Connect MetaMask</button>
+    </div>
+  </header>
+
+  <!-- Who is connected -->
+  <div class="card">
+    <div id="walletInfo" class="muted">Not connected. Click "Connect MetaMask" to start.</div>
+  </div>
+
+  <!-- Status / transaction messages -->
+  <div id="status" class="card"></div>
+
+  <!-- Post a new request -->
+  <div class="card">
+    <h2>Post a tutoring request</h2>
+    <div class="row">
+      <div>
+        <label for="subject">Subject</label>
+        <input id="subject" type="text" placeholder="e.g. COMM 412 exam prep">
+      </div>
+      <div>
+        <label for="amount">Payment (ETH)</label>
+        <input id="amount" type="number" min="0" step="0.0001" placeholder="0.01">
+      </div>
+    </div>
+    <p class="muted">The payment is locked in the contract until you release it or cancel.</p>
+    <button id="postBtn" disabled>Post request &amp; lock payment</button>
+  </div>
+
+  <!-- All requests -->
+  <div class="card">
+    <h2>All requests</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Subject</th><th>Payment</th><th>Status</th><th>Student</th><th>Actions</th></tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr><td colspan="6" class="muted">Connect your wallet to load requests.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><button id="refreshBtn" class="grey small" disabled>Refresh</button></p>
+  </div>
+
+</div>
+
+<script>
+/* =====================================================================
+   SETTINGS: EDIT THIS
+   ===================================================================== */
+const CONTRACT_ADDRESS = "0x99e3d38D665143a5c803df9E0d188d9F5627663A";   // <-- paste your deployed address here
+
+/* Sepolia network details (you normally do not need to change these) */
+const SEPOLIA_CHAIN_ID_DEC = 11155111;
+const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7";
+
+/* The contract's "menu" of functions (ABI), so ethers knows how to talk to it */
+const ABI = [
+  "function requestCount() view returns (uint256)",
+  "function requests(uint256) view returns (address student, address tutor, uint256 amount, string subject, uint8 status)",
+  "function postRequest(string subject) payable returns (uint256)",
+  "function acceptRequest(uint256 id)",
+  "function releasePayment(uint256 id)",
+  "function cancelRequest(uint256 id)"
+];
+
+/* Status numbers from the contract -> readable names */
+const STATUS = ["Open", "Accepted", "Paid", "Cancelled"];
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+/* =====================================================================
+   STATE (values we keep while the page is open)
+   ===================================================================== */
+let provider = null;       // read-only connection to the blockchain via MetaMask
+let signer = null;         // the connected account, able to sign transactions
+let account = null;       // the connected address (string)
+let readContract = null;   // contract object for reading data
+let writeContract = null;  // contract object for sending transactions
+let busy = false;          // true while a transaction is in progress
+
+/* Shortcuts to page elements */
+const $ = (id) => document.getElementById(id);
+
+/* =====================================================================
+   SMALL HELPERS
+   ===================================================================== */
+
+/* Show a message in the status box. type: "" (info), "ok", or "err" */
+function setStatus(html, type) {
+  const box = $("status");
+  box.style.display = "block";
+  box.className = "card " + (type || "");
+  box.innerHTML = html;
+}
+
+/* Turn any error into a friendly one-line message */
+function friendlyError(err) {
+  if (err && (err.code === "ACTION_REJECTED" || err.code === 4001)) {
+    return "You rejected the request in MetaMask.";
+  }
+  return (err && (err.reason || err.shortMessage || err.message)) || "Something went wrong.";
+}
+
+/* Shorten an address like 0x1234...abcd */
+function short(addr) {
+  return addr.slice(0, 6) + "…" + addr.slice(-4);
+}
+
+/* Escape text so a subject like "<b>hi</b>" can never inject HTML into the page */
+function esc(text) {
+  const d = document.createElement("div");
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+/* Enable/disable the main buttons */
+function setButtons(enabled) {
+  $("postBtn").disabled = !enabled;
+  $("refreshBtn").disabled = !enabled;
+}
+
+/* =====================================================================
+   CONNECT WALLET
+   ===================================================================== */
+async function connect() {
+  if (!window.ethereum) {
+    setStatus("MetaMask was not found. Please install the MetaMask extension and reload.", "err");
+    return;
+  }
+  if (!ethers.isAddress(CONTRACT_ADDRESS)) {
+    setStatus("Please paste your contract address into <code>CONTRACT_ADDRESS</code> at the top of the script.", "err");
+    return;
+  }
+
+  try {
+    setStatus("Connecting to MetaMask…");
+
+    // Step 1: create the provider and ask the user to allow access to their accounts
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+
+    // Step 2 (network guard): make sure the wallet is on Sepolia
+    const chainHex = await window.ethereum.request({ method: "eth_chainId" });
+    if (chainHex !== SEPOLIA_CHAIN_ID_HEX) {
+      await switchToSepolia();
+      // After a network switch ethers needs a fresh provider
+      provider = new ethers.BrowserProvider(window.ethereum);
+    }
+
+    // Step 3: get the signer (the account that signs transactions)
+    signer = await provider.getSigner();
+    account = await signer.getAddress();
+
+    // Contract objects: one for reading, one for writing
+    readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
+    writeContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+
+    $("connectBtn").textContent = "Connected";
+    $("connectBtn").disabled = true;
+    $("walletInfo").innerHTML = "Connected as <b>" + short(account) + "</b> on Sepolia";
+    setButtons(true);
+    setStatus("Connected. Loading requests…");
+    await loadRequests();
+    setStatus("Ready.", "ok");
+  } catch (err) {
+    setStatus("Could not connect: " + esc(friendlyError(err)), "err");
+  }
+}
+
+/* Ask MetaMask to switch to Sepolia (and add it if MetaMask doesn't know it) */
+async function switchToSepolia() {
+  try {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }]
+    });
+  } catch (err) {
+    if (err.code === 4902) {   // 4902 = network not added to the wallet yet
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: SEPOLIA_CHAIN_ID_HEX,
+          chainName: "Sepolia",
+          nativeCurrency: { name: "Sepolia ETH", symbol: "ETH", decimals: 18 },
+          rpcUrls: ["https://rpc.sepolia.org"],
+          blockExplorerUrls: ["https://sepolia.etherscan.io"]
+        }]
+      });
+    } else {
+      throw err;
+    }
+  }
+}
+
+/* =====================================================================
+   READ ALL REQUESTS AND DRAW THE TABLE
+   ===================================================================== */
+
+/* How many requests exist? Uses requestCount() if the contract has it,
+   otherwise counts by asking for request 0, 1, 2… until one doesn't exist. */
+async function getCount() {
+  try {
+    return Number(await readContract.requestCount());
+  } catch (e) {
+    let i = 0;
+    while (i < 500) {                 // safety limit
+      try { await readContract.requests(i); i++; }
+      catch (err) { break; }          // reverts when the id doesn't exist
+    }
+    return i;
+  }
+}
+
+async function loadRequests() {
+  const body = $("tableBody");
+  try {
+    const count = await getCount();
+    const rows = [];
+    for (let id = 0; id < count; id++) {
+      const r = await readContract.requests(id);
+      rows.push({
+        id,
+        student: r.student,
+        tutor: r.tutor,
+        amount: r.amount,
+        subject: r.subject,
+        status: Number(r.status)
+      });
+    }
+
+    // Skip empty placeholder slots (student = zero address), if your contract has one
+    const real = rows.filter((r) => r.student !== ZERO_ADDRESS);
+
+    if (real.length === 0) {
+      body.innerHTML = '<tr><td colspan="6" class="muted">No requests yet. Post the first one above!</td></tr>';
+      return;
+    }
+
+    body.innerHTML = "";
+    real.forEach((r) => body.appendChild(buildRow(r)));
+  } catch (err) {
+    body.innerHTML = '<tr><td colspan="6" class="muted">Could not load requests: ' +
+                     esc(friendlyError(err)) + "</td></tr>";
+  }
+}
+
+/* Build one table row, including only the buttons that make sense for this user */
+function buildRow(r) {
+  const tr = document.createElement("tr");
+  const statusName = STATUS[r.status] || "Unknown";
+  const isStudent = r.student.toLowerCase() === account.toLowerCase();
+
+  tr.innerHTML =
+    "<td>" + r.id + "</td>" +
+    "<td>" + esc(r.subject) + "</td>" +
+    "<td>" + ethers.formatEther(r.amount) + " ETH</td>" +
+    '<td><span class="badge ' + statusName + '">' + statusName + "</span></td>" +
+    "<td>" + short(r.student) + (isStudent ? " (you)" : "") + "</td>";
+
+  const actions = document.createElement("td");
+
+  // Accept: only while Open, and never for the student themself
+  if (statusName === "Open" && !isStudent) {
+    actions.appendChild(makeButton("Accept", "", () => sendTx("Accepting request " + r.id, () => writeContract.acceptRequest(r.id))));
+  }
+  // Release payment: only the student, only after a tutor accepted
+  if (statusName === "Accepted" && isStudent) {
+    actions.appendChild(makeButton("Release payment", "green", () => sendTx("Releasing payment for request " + r.id, () => writeContract.releasePayment(r.id))));
+  }
+  // Cancel: only the student, only while still Open
+  if (statusName === "Open" && isStudent) {
+    actions.appendChild(makeButton("Cancel", "red", () => sendTx("Cancelling request " + r.id, () => writeContract.cancelRequest(r.id))));
+  }
+  tr.appendChild(actions);
+  return tr;
+}
+
+function makeButton(label, colorClass, onClick) {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.className = "small " + colorClass;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+/* =====================================================================
+   SEND A TRANSACTION (used by every action)
+   ===================================================================== */
+async function sendTx(label, makeTx) {
+  if (busy) return;                 // prevent double clicks
+  busy = true;
+  setButtons(false);
+  try {
+    setStatus(esc(label) + "… please confirm in MetaMask.");
+    const tx = await makeTx();      // MetaMask pops up here
+
+    const link = '<a href="https://sepolia.etherscan.io/tx/' + tx.hash +
+                 '" target="_blank" rel="noopener">' + short(tx.hash) + "</a>";
+    setStatus(esc(label) + ": transaction sent (" + link + "). Waiting for confirmation…");
+
+    await tx.wait();                // wait until it is mined
+
+    setStatus("✅ Confirmed! Transaction " + link, "ok");
+    await loadRequests();           // refresh the table
+  } catch (err) {
+    setStatus("❌ " + esc(friendlyError(err)), "err");
+  } finally {
+    busy = false;
+    setButtons(true);
+  }
+}
+
+/* Post a new request */
+async function postRequest() {
+  const subject = $("subject").value.trim();
+  const amountText = $("amount").value.trim();
+
+  if (!subject) { setStatus("Please enter a subject.", "err"); return; }
+  let value;
+  try {
+    value = ethers.parseEther(amountText);
+  } catch (e) {
+    setStatus("Please enter a valid payment amount in ETH.", "err");
+    return;
+  }
+  if (value <= 0n) { setStatus("The payment must be greater than 0.", "err"); return; }
+
+  await sendTx("Posting request", () => writeContract.postRequest(subject, { value }));
+  $("subject").value = "";
+  $("amount").value = "";
+}
+
+/* =====================================================================
+   WIRE UP BUTTONS AND WALLET EVENTS
+   ===================================================================== */
+$("connectBtn").addEventListener("click", connect);
+$("postBtn").addEventListener("click", postRequest);
+$("refreshBtn").addEventListener("click", loadRequests);
+
+if (window.ethereum) {
+  // If the user switches account or network in MetaMask, simply reload the page
+  window.ethereum.on("accountsChanged", () => window.location.reload());
+  window.ethereum.on("chainChanged", () => window.location.reload());
+}
+</script>
+</body>
+</html>
